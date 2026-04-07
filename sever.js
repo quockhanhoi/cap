@@ -3,48 +3,36 @@ const axios = require("axios");
 
 const app = express();
 
-app.get("/", (req, res) => {
-    res.send("Facebook API Running");
+app.get("/", (req,res)=>{
+res.send("CAP FB API");
 });
 
-app.get("/screenshot/:uid/*", async (req, res) => {
+app.get("/screenshot/:uid/:cookie", async (req,res)=>{
 
-    const uid = req.params.uid;
-    const cookies = decodeURIComponent(req.params[0]);
+const {uid,cookie} = req.params;
 
-    try {
+try{
 
-        const response = await axios({
-            method: "GET",
-            url: `https://www.facebook.com/${uid}`,
-            headers: {
+const fb = await axios.get(`https://facebook.com/${uid}`,{
+headers:{
+"user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/97 Safari/537.36",
+"cookie":cookie
+}
+});
 
-                "User-Agent":
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.71 Safari/537.36",
+const html = encodeURIComponent(fb.data);
 
-                "Accept":
-                "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+const link = `https://api.screenshotmachine.com/?key=644a81&url=data:text/html,${html}&dimension=1920x3000&device=desktop`;
 
-                "Accept-Language": "en-US,en;q=0.9",
+res.redirect(link);
 
-                "Cookie": cookies
-
-            }
-        });
-
-        res.send(response.data);
-
-    } catch (err) {
-
-        res.json({
-            error: true,
-            message: err.message
-        });
-
-    }
+}catch(e){
+res.json({
+error:true,
+message:e.message
+});
+}
 
 });
 
-app.listen(process.env.PORT || 3000, () => {
-    console.log("Server running");
-});
+app.listen(process.env.PORT || 3000);
