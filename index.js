@@ -1,57 +1,83 @@
-const express = require('express');
-const axios = require('axios');
-const puppeteer = require('puppeteer');
+import express from "express";
+import puppeteer from "puppeteer";
+
 const app = express();
+app.use(express.json());
 
-const BROWSER_ARGS = ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-software-rasterizer','--disable-extensions','--no-first-run','--no-zygote'];
+const USER_AGENT =
+"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36";
 
-function parseCookies(cookieStr) {
-    return cookieStr.split(';').map(s => s.trim()).filter(Boolean).map(part => {
-        const idx = part.indexOf('=');
-        if (idx === -1) return null;
-        return { name: part.slice(0,idx).trim(), value: part.slice(idx+1).trim(), domain: '.facebook.com', path: '/', httpOnly: false, secure: true };
-    }).filter(Boolean);
-}
-
-app.get('/', (req, res) => res.send('Cap service OK'));
-
-app.get('/screenshot/:uid/:cookies', (req, res) => {
-    const { uid, cookies } = req.params;
-    axios({ method: 'GET', url: `https://facebook.com/${uid}/`, headers: { 'user-agent': 'Mozilla/5.0', 'Cookie': cookies } })
-        .then(r => res.send(r.data)).catch(e => res.send(String(e)));
-});
-
-app.get('/capture/:uid/:cookies', async (req, res) => {
-    const { uid, cookies } = req.params;
+app.post("/screenshot", async (req, res) => {
     let browser;
+
     try {
-        browser = await puppeteer.launch({ headless: true, args: BROWSER_ARGS });
+        const { uid, cookie } = req.body;
+
+        if (!uid || !cookie) {
+            return res.status(400).json({ error: "missing uid or cookie" });
+        }
+
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--single-process",
+                "--no-zygote"
+            ]
+        });
+
         const page = await browser.newPage();
-        await page.setViewport({ width: 1280, height: 900 });
-        await page.setCookie(...parseCookies(decodeURIComponent(cookies)));
-        await page.goto(`https://www.facebook.com/profile.php?id=${uid}`, { waitUntil: 'networkidle2', timeout: 30000 });
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-            await page.evaluate(() => {
-                for (const sel of ['[aria-label="Đóng"]','[aria-label="Close"]','div[role="dialog"] button']) {
-                    const el = document.querySelector(sel); if (el) { el.click(); break; }
-                }
-                document.querySelectorAll('div[role="banner"] button').forEach(b => {
-                    if (b.textContent.trim()==='Đóng'||b.textContent.trim()==='Close') b.click();
-                });
+
+        await page.setUserAgent(USER_AGENT);
+
+        // set cookie safe
+        const cookies = cookie.split(";")
+            .map(c => c.trim())
+            .filter(Boolean)
+            .map(c => {
+                const parts = c.split("=");
+                return {
+                    name: parts[0],
+                    value: parts.slice(1).join("="),
+                    domain: ".facebook.com",
+                    path: "/"
+                };
             });
-            await new Promise(r => setTimeout(r, 800));
-        } catch {}
-        await page.keyboard.press('Escape');
-        await new Promise(r => setTimeout(r, 500));
-        const screenshot = await page.screenshot({ type: 'png', fullPage: false });
-        res.set('Content-Type', 'image/png');
-        res.send(screenshot);
+
+        await page.setCookie(...cookies);
+
+        const url = `https://m.facebook.com/${uid}`;
+
+        await page.goto(url, {
+            waitUntil: "networkidle2",
+            timeout: 60000
+        });
+
+        await page.waitForTimeout(3000);
+
+        const img = await page.screenshot({
+            fullPage: true
+        });
+
+        await browser.close();
+
+        res.setHeader("Content-Type", "image/png");
+        return res.send(img);
+
     } catch (err) {
-        res.status(500).send('ERROR: ' + err.message);
-    } finally {
+        console.error("[CAP ERROR]", err.message);
+
         if (browser) await browser.close();
+
+        return res.status(500).json({
+            error: err.message
+        });
     }
 });
 
-app.listen(process.env.PORT || 3000, () => console.log('Cap service running'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log("CAP SERVER RUNNING ON", PORT);
+});
