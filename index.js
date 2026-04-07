@@ -1,37 +1,57 @@
 const express = require('express');
 const axios = require('axios');
+const puppeteer = require('puppeteer');
 const app = express();
 
-app.get('/', (req, res) => {
-    res.send('djt mẹ mày!');
-});
+const BROWSER_ARGS = ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-software-rasterizer','--disable-extensions','--no-first-run','--no-zygote'];
+
+function parseCookies(cookieStr) {
+    return cookieStr.split(';').map(s => s.trim()).filter(Boolean).map(part => {
+        const idx = part.indexOf('=');
+        if (idx === -1) return null;
+        return { name: part.slice(0,idx).trim(), value: part.slice(idx+1).trim(), domain: '.facebook.com', path: '/', httpOnly: false, secure: true };
+    }).filter(Boolean);
+}
+
+app.get('/', (req, res) => res.send('Cap service OK'));
 
 app.get('/screenshot/:uid/:cookies', (req, res) => {
     const { uid, cookies } = req.params;
-    const options = {
-        method: 'GET',
-        url: `https://facebook.com/${uid}/`,
-        headers: {
-            'authority': 'business.facebook.com',
-            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36',
-            'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
-            'accept-language': 'en-US,en;q=0.9',
-            'sec-ch-ua': '"Google Chrome";v="107", "Chromium";v="107", "Not=A?Brand";v="24"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': "Windows",
-            'sec-fetch-dest': 'document',
-            'sec-fetch-mode': 'navigate',
-            'sec-fetch-site': 'none',
-            'sec-fetch-user': '?1',
-            'upgrade-insecure-requests': '1',
-            'Cookie': cookies
-        }
-    };
-    axios(options).then(function (response) {
-        res.send(response.data);
-    }).catch(function (error) {
-        res.send(error);
-    });
+    axios({ method: 'GET', url: `https://facebook.com/${uid}/`, headers: { 'user-agent': 'Mozilla/5.0', 'Cookie': cookies } })
+        .then(r => res.send(r.data)).catch(e => res.send(String(e)));
 });
 
-app.listen(process.env.PORT || 3000, () => console.log("let go"))
+app.get('/capture/:uid/:cookies', async (req, res) => {
+    const { uid, cookies } = req.params;
+    let browser;
+    try {
+        browser = await puppeteer.launch({ headless: true, args: BROWSER_ARGS });
+        const page = await browser.newPage();
+        await page.setViewport({ width: 1280, height: 900 });
+        await page.setCookie(...parseCookies(decodeURIComponent(cookies)));
+        await page.goto(`https://www.facebook.com/profile.php?id=${uid}`, { waitUntil: 'networkidle2', timeout: 30000 });
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+            await page.evaluate(() => {
+                for (const sel of ['[aria-label="Đóng"]','[aria-label="Close"]','div[role="dialog"] button']) {
+                    const el = document.querySelector(sel); if (el) { el.click(); break; }
+                }
+                document.querySelectorAll('div[role="banner"] button').forEach(b => {
+                    if (b.textContent.trim()==='Đóng'||b.textContent.trim()==='Close') b.click();
+                });
+            });
+            await new Promise(r => setTimeout(r, 800));
+        } catch {}
+        await page.keyboard.press('Escape');
+        await new Promise(r => setTimeout(r, 500));
+        const screenshot = await page.screenshot({ type: 'png', fullPage: false });
+        res.set('Content-Type', 'image/png');
+        res.send(screenshot);
+    } catch (err) {
+        res.status(500).send('ERROR: ' + err.message);
+    } finally {
+        if (browser) await browser.close();
+    }
+});
+
+app.listen(process.env.PORT || 3000, () => console.log('Cap service running'));
